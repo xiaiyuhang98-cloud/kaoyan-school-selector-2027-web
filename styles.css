@@ -221,3 +221,28 @@ footer p { max-width: 55rem; color: #c6d7df; }
   .history-stat { border-right: 0; border-bottom: 1px solid var(--ink); }
   .history-stat:last-child { border-bottom: 0; }
 }
+
+/* Strict 22408 evidence dataset */
+.strict-section { margin-top: 5rem; }
+.scope-banner {
+  display: flex; gap: .65rem; align-items: baseline; flex-wrap: wrap;
+  margin: 1rem 0 1.25rem; padding: 1rem 1.15rem;
+  border-left: 4px solid var(--accent, #b44b2a);
+  background: color-mix(in srgb, var(--paper, #f5f0e6) 88%, #f0a66b 12%);
+}
+.scope-banner span { color: var(--muted, #625f58); }
+.strict-filters { grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(130px, 1fr)) minmax(190px, 1fr); }
+.strict-filters .check-label { align-self: end; min-height: 2.75rem; display: flex; align-items: center; gap: .5rem; }
+.strict-filters .check-label input { width: auto; }
+#strict-table { min-width: 1280px; }
+#strict-table td { vertical-align: top; }
+.subject-code { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700; }
+.missing-value { color: var(--muted, #746f66); font-style: italic; }
+.table-footnote { margin-top: .8rem; color: var(--muted, #625f58); font-size: .9rem; }
+@media (max-width: 900px) {
+  .strict-filters { grid-template-columns: 1fr 1fr; }
+  .scope-banner { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 560px) {
+  .strict-filters { grid-template-columns: 1fr; }
+}
