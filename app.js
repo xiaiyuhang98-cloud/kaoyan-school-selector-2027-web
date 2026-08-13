@@ -267,6 +267,106 @@ function renderSchoolCoverage() {
 }
 
 
+function merged22408Outcomes(programKey) {
+  const source = (data.outcomes_22408 || []).filter(row => row.program_key === programKey);
+  const byYear = new Map();
+  source.forEach(row => {
+    const existing = byYear.get(row.year) || {};
+    const merged = {...existing};
+    Object.entries(row).forEach(([key, value]) => {
+      if (value !== null && value !== "") merged[key] = value;
+    });
+    byYear.set(row.year, merged);
+  });
+  return [...byYear.values()].sort((a, b) => b.year - a.year);
+}
+function nullableMetric(value, suffix = "") {
+  return value === null || value === undefined || value === "" ? "待核验" : `${value}${suffix}`;
+}
+function renderStrict22408() {
+  const programs = data.programs_22408 || [];
+  const meta = data.strict_22408_meta || {};
+  const provinceSelect = document.getElementById("strict-province");
+  const yearSelect = document.getElementById("strict-year");
+  const modeSelect = document.getElementById("strict-mode");
+  if (provinceSelect.options.length === 1) {
+    [...new Set(programs.map(x => x.province))].sort((a,b) => a.localeCompare(b, "zh-CN")).forEach(value => {
+      const option = node("option", "", value); option.value = value; provinceSelect.append(option);
+    });
+    [...new Set(programs.map(x => x.admission_year))].sort((a,b) => b-a).forEach(value => {
+      const option = node("option", "", String(value)); option.value = String(value); yearSelect.append(option);
+    });
+    [...new Set(programs.map(x => x.study_mode))].sort((a,b) => a.localeCompare(b, "zh-CN")).forEach(value => {
+      const option = node("option", "", value); option.value = value; modeSelect.append(option);
+    });
+  }
+  document.getElementById("strict-scope-status").textContent =
+    `${meta.status || "持续核验中"}。范围：${meta.scope || "见方法说明"}。截止 ${meta.last_verified_at || "—"}。`;
+  const summary = document.getElementById("strict-summary");
+  summary.replaceChildren();
+  [
+    [meta.verified_school_count || 0, "所学校已有官方科目证据"],
+    [meta.verified_program_unit_count || 0, "个培养单位/专业/方式组合"],
+    [meta.program_units_with_department_cutoff || 0, "个项目已有学院复试线"],
+    [meta.program_units_with_ratio_evidence || 0, "个项目已有比例证据"]
+  ].forEach(([value, label]) => {
+    const card = node("div", "history-stat"); card.append(node("strong", "", value), node("span", "", label)); summary.append(card);
+  });
+  const cutoffRows = programs.flatMap(p => merged22408Outcomes(p.program_key)
+    .filter(o => o.department_reexam_line !== null && o.department_reexam_line !== undefined)
+    .map(o => ({school:p.school_name, code:p.program_code, line:o.department_reexam_line, year:o.year})));
+  const high = [...cutoffRows].sort((a,b) => b.line-a.line).slice(0,4)
+    .map(x => `${x.school}${x.code}（${x.year}）${x.line}`).join("；");
+  document.getElementById("strict-analysis").textContent = cutoffRows.length
+    ? `已核验项目中，较高的学院复试线包括：${high}。这只是进入复试门槛，不等于录取最低分；复试名单和拟录取名单仍需继续结构化。`
+    : "当前尚无可复核的学院复试线。";
+  const query = document.getElementById("strict-search").value.trim().toLowerCase();
+  const province = provinceSelect.value, year = yearSelect.value, mode = modeSelect.value;
+  const outcomeOnly = document.getElementById("strict-outcome-only").checked;
+  const rows = programs.filter(item => {
+    const haystack = `${item.school_name} ${item.department} ${item.program_code} ${item.program_name}`.toLowerCase();
+    const outcomes = merged22408Outcomes(item.program_key);
+    return (!query || haystack.includes(query))
+      && (province === "all" || item.province === province)
+      && (year === "all" || String(item.admission_year) === year)
+      && (mode === "all" || item.study_mode === mode)
+      && (!outcomeOnly || outcomes.some(o => o.department_reexam_line !== null || o.ratio_value !== null));
+  }).sort((a,b) => a.school_name.localeCompare(b.school_name,"zh-CN") || a.department.localeCompare(b.department,"zh-CN") || a.program_code.localeCompare(b.program_code));
+  const tbody = document.querySelector("#strict-table tbody"); tbody.replaceChildren();
+  rows.forEach(item => {
+    const outcomes = merged22408Outcomes(item.program_key);
+    const latest = outcomes[0] || {};
+    const tr = node("tr");
+    const school = node("td", "program-cell");
+    school.append(node("strong", "", item.school_name), node("span", "", `${item.department} · ${item.institution_scope}`));
+    const program = node("td", "program-cell");
+    program.append(node("strong", "", item.program_code), node("span", "", item.program_name));
+    const plan = node("td", "history-cell");
+    plan.append(node("strong", "", item.unified_exam_plan === null ? "统考待核验" : `统考 ${item.unified_exam_plan}`),
+      node("span", "", item.catalog_plan_total === null ? "总计划待核验" : `总计 ${item.catalog_plan_total} · 推免 ${nullableMetric(item.recommendation_exempt)}`));
+    const basic = node("td", latest.school_basic_line == null && latest.national_line == null ? "missing-value" : "");
+    basic.textContent = latest.school_basic_line != null ? `学校 ${latest.school_basic_line}` :
+      latest.national_line != null ? `国家 ${latest.national_line}` : "待核验";
+    const cutoff = node("td", latest.department_reexam_line == null ? "missing-value" : "score-cell",
+      latest.department_reexam_line == null ? "待核验" : `${latest.department_reexam_line}（${latest.year}）`);
+    const ratio = node("td", "history-cell");
+    if (latest.ratio_value != null) {
+      ratio.append(node("strong", "", `${latest.ratio_kind || "比例"} ${latest.ratio_value}:1`),
+        node("span", "", latest.ratio_scope || ""));
+    } else ratio.append(node("span", "missing-value", "待核验"));
+    const source = node("td");
+    source.append(sourceLink(item.source_url, "官方目录"));
+    if (latest.source_url && latest.source_url !== item.source_url) source.append(document.createElement("br"), sourceLink(latest.source_url, "复试/统计"));
+    [school, node("td","",item.admission_year), program, node("td","",item.study_mode),
+      node("td","subject-code",item.subject_codes), plan, basic, cutoff, ratio, source].forEach(td => tr.append(td));
+    if (item.notes || latest.caveat) {
+      tr.title = [item.notes, latest.caveat].filter(Boolean).join("；");
+    }
+    tbody.append(tr);
+  });
+  document.getElementById("strict-heading").dataset.count = String(rows.length);
+}
+
 function renderHistoricalFacts() {
   const programIds = new Set(historicalFacts.map(item => item.program_id));
   Object.keys(data.admissions || {}).forEach(id => programIds.add(id));
@@ -358,7 +458,7 @@ function renderAudit() {
 }
 
 renderWeightControls(); renderTopCards(); populateFilters(); setPreset("default"); renderSchoolCoverage();
-renderHistoricalFacts(); renderNjupt(); renderDistributions(); renderAudit();
+renderStrict22408(); renderHistoricalFacts(); renderNjupt(); renderDistributions(); renderAudit();
 ["tier-filter", "city-filter", "degree-filter", "evidence-filter", "sort-select"].forEach(id => document.getElementById(id).addEventListener("change", renderCandidateRows));
 document.getElementById("subject-408-filter").addEventListener("change", renderCandidateRows);
 document.getElementById("search-input").addEventListener("input", renderCandidateRows);
@@ -372,3 +472,7 @@ document.getElementById("reset-personalization").addEventListener("click", () =>
 document.getElementById("clear-compare").addEventListener("click", () => {
   compared.clear(); saveCompared(); renderCandidateRows(); renderCompare();
 });
+
+["strict-province","strict-year","strict-mode"].forEach(id => document.getElementById(id).addEventListener("change", renderStrict22408));
+document.getElementById("strict-search").addEventListener("input", renderStrict22408);
+document.getElementById("strict-outcome-only").addEventListener("change", renderStrict22408);
