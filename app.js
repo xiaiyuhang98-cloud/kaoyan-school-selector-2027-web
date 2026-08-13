@@ -2,6 +2,9 @@
 const data = JSON.parse(document.getElementById("report-data").textContent);
 const tierOrder = ["top", "watch", "high_risk_high_reward", "insufficient_data", "excluded"];
 const byId = new Map(data.candidates.map(item => [item.program_id, item]));
+const historicalFacts = data.historical_facts || [];
+const historyByProgram = new Map();
+historicalFacts.forEach(item => { const rows = historyByProgram.get(item.program_id) || []; rows.push(item); historyByProgram.set(item.program_id, rows); });
 const dimensionLabels = data.meta.dimension_labels;
 const dimensionKeys = Object.keys(dimensionLabels);
 const presets = {
@@ -52,6 +55,9 @@ function referenceFor(programId) {
   }
   const distribution = data.distributions.find(item => item.program_id === programId);
   if (distribution) return {value: distribution.initial_median, label: `${distribution.year} 复试名单初试中位数`};
+  const history = (historyByProgram.get(programId) || []).filter(item => item.reexam_cutoff !== null)
+    .sort((a, b) => b.year - a.year)[0];
+  if (history) return {value: history.reexam_cutoff, label: `${history.year} 复试线（${history.study_scope}）`};
   return null;
 }
 function saveCompared() {
@@ -169,10 +175,31 @@ function renderCandidateRows() {
     const personal = personalFit(item);
     const scoreTd = node("td", "score-cell", `${personal === null ? "—" : personal.toFixed(2)} / ${item.fit_score.toFixed(2)}`);
     const evidenceTd = node("td"); evidenceTd.append(evidenceMeter(item.evidence_completeness));
+    const historyTd = node("td", "history-cell");
+    const admissionRows = data.admissions[item.program_id] || [];
+    const distribution = data.distributions.find(row => row.program_id === item.program_id);
+    const fact = (historyByProgram.get(item.program_id) || []).sort((a, b) => b.year - a.year)[0];
+    if (admissionRows.length) {
+      const latest = [...admissionRows].sort((a, b) => b.year - a.year)[0];
+      historyTd.append(node("strong", "", `${latest.year} 复试线 ${latest.reexam_cutoff}`),
+        node("span", "", `录取 ${latest.admitted_total} · 报考 ${latest.applications}`));
+    } else if (distribution) {
+      historyTd.append(node("strong", "", `${distribution.year} 名单中位 ${distribution.initial_median}`),
+        node("span", "", `Q1–Q3：${distribution.initial_q1}–${distribution.initial_q3}`));
+    } else if (fact) {
+      const metrics = [];
+      if (fact.reexam_cutoff !== null) metrics.push(`复试线 ${fact.reexam_cutoff}`);
+      if (fact.unified_exam_plan !== null) metrics.push(`统考 ${fact.unified_exam_plan}`);
+      else if (fact.plan_total !== null) metrics.push(`计划 ${fact.plan_total}`);
+      historyTd.append(node("strong", "", `${fact.year} ${metrics.join(" · ") || "已核验"}`),
+        node("span", "", fact.study_scope), sourceLink(fact.source_url, "历史来源"));
+    } else {
+      historyTd.append(node("span", "missing-history", "暂无结构化历史数据"));
+    }
     const sourceTd = node("td"); sourceTd.append(sourceLink(item.source_url));
     [compareTd, tierTd, programTd, node("td", "", item.city), scoreTd, evidenceTd,
       node("td", "", `${item.subject_bundle}${item.subject_evidence_year ? `（${item.subject_evidence_year}）` : ""}`),
-      node("td", "", item.evidence_gaps), sourceTd].forEach(td => tr.append(td));
+      historyTd, node("td", "", item.evidence_gaps), sourceTd].forEach(td => tr.append(td));
     tbody.append(tr);
   });
   document.getElementById("result-count").textContent = `显示 ${rows.length} / ${data.candidates.length} 项`;
@@ -239,6 +266,43 @@ function renderSchoolCoverage() {
   });
 }
 
+
+function renderHistoricalFacts() {
+  const programIds = new Set(historicalFacts.map(item => item.program_id));
+  Object.keys(data.admissions || {}).forEach(id => programIds.add(id));
+  data.distributions.forEach(item => programIds.add(item.program_id));
+  const schoolIds = new Set([...programIds].map(id => byId.get(id)?.school_id).filter(Boolean));
+  const cutoffs = historicalFacts.filter(item => item.reexam_cutoff !== null).sort((a, b) => b.reexam_cutoff - a.reexam_cutoff);
+  const quotaRows = historicalFacts.filter(item => item.unified_exam_plan !== null).sort((a, b) => a.unified_exam_plan - b.unified_exam_plan);
+  const cards = [
+    [schoolIds.size, "所学校有结构化历史数据"],
+    [programIds.size, "个候选项目可直接对照"],
+    [cutoffs.length ? `${cutoffs.at(-1).reexam_cutoff}–${cutoffs[0].reexam_cutoff}` : "—", "2026 已核验复试线区间"],
+    [quotaRows.length ? quotaRows[0].unified_exam_plan : "—", "最低明确统考名额"]
+  ];
+  const summary = document.getElementById("history-summary");
+  cards.forEach(([value, label]) => {
+    const card = node("div", "history-stat"); card.append(node("strong", "", value), node("span", "", label)); summary.append(card);
+  });
+  const topLines = cutoffs.slice(0, 5).map(item => `${item.school_name}${item.program_code}：${item.reexam_cutoff}`).join("；");
+  const tightPlans = quotaRows.slice(0, 3).map(item => `${item.school_name}${item.program_code}：${item.unified_exam_plan}`).join("；");
+  document.getElementById("history-analysis").textContent =
+    `怎么读：当前高位复试线包括 ${topLines}。明确统考名额较紧的项目包括 ${tightPlans}。复试线只是进入复试门槛，名额口径也可能含专项或推免，不能直接换算录取概率。`;
+  const tbody = document.querySelector("#history-table tbody");
+  [...historicalFacts].sort((a, b) => (b.reexam_cutoff ?? -1) - (a.reexam_cutoff ?? -1) || a.school_name.localeCompare(b.school_name, "zh-CN")).forEach(item => {
+    const tr = node("tr");
+    const planText = item.unified_exam_plan !== null ? `统考 ${item.unified_exam_plan}` :
+      item.plan_total !== null ? `总计划 ${item.plan_total}` : "—";
+    const exemptText = item.recommendation_exempt !== null ? `推免 ${item.recommendation_exempt}` : "";
+    [
+      item.school_name, `${item.program_code} · ${item.program_name}`, item.study_scope,
+      item.reexam_cutoff ?? "—", [planText, exemptText].filter(Boolean).join(" · "), item.notes
+    ].forEach(value => tr.append(node("td", "", value)));
+    const sourceTd = node("td"); sourceTd.append(sourceLink(item.source_url, "官方公告")); tr.append(sourceTd);
+    tbody.append(tr);
+  });
+}
+
 function renderNjupt() {
   const host = document.getElementById("njupt-stats");
   const table = node("table", "mini-table");
@@ -294,7 +358,7 @@ function renderAudit() {
 }
 
 renderWeightControls(); renderTopCards(); populateFilters(); setPreset("default"); renderSchoolCoverage();
-renderNjupt(); renderDistributions(); renderAudit();
+renderHistoricalFacts(); renderNjupt(); renderDistributions(); renderAudit();
 ["tier-filter", "city-filter", "degree-filter", "evidence-filter", "sort-select"].forEach(id => document.getElementById(id).addEventListener("change", renderCandidateRows));
 document.getElementById("subject-408-filter").addEventListener("change", renderCandidateRows);
 document.getElementById("search-input").addEventListener("input", renderCandidateRows);
